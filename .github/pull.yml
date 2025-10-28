@@ -1,0 +1,10 @@
+version: "1"
+rules:
+  - base: main
+    upstream: alam00000:main
+    mergeMethod: rebase
+    mergeUnstable: false
+    assignees:
+      - ghtestuser5511
+    conflictReviewers:
+      - ghtestuser5511
