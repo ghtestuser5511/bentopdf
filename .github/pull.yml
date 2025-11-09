@@ -3,4 +3,4 @@ rules:
   - base: main
     upstream: alam00000:main
     mergeMethod: rebase
-    mergeUnstable: false
+    mergeUnstable: true
