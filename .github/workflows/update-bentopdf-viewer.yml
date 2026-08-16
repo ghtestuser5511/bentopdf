@@ -1,4 +1,4 @@
-name: Update EmbedPDF Snippet
+name: Update BentoPDF Viewer
 
 on:
   workflow_dispatch:
@@ -17,17 +17,17 @@ jobs:
       - name: Read current upstream version marker
         id: current-version
         run: |
-          if [ -f vendor/embedpdf/.upstream-version ]; then
-            CUR=$(cat vendor/embedpdf/.upstream-version)
+          if [ -f vendor/bentopdf-viewer/.upstream-version ]; then
+            CUR=$(cat vendor/bentopdf-viewer/.upstream-version)
           else
             CUR=""
           fi
           echo "version=$CUR" >> "$GITHUB_OUTPUT"
 
-      - name: Read latest upstream version (@embedpdf/core)
+      - name: Read latest commit from our viewer fork (v2 branch)
         id: upstream-version
         run: |
-          LATEST=$(npm view @embedpdf/core version)
+          LATEST=$(git ls-remote https://github.com/alam00000/bentopdf-pdfium-viewer refs/heads/v2 | cut -c1-12)
           echo "version=$LATEST" >> "$GITHUB_OUTPUT"
 
       - name: Should update?
@@ -48,12 +48,12 @@ jobs:
       - name: Prepare workspace
         if: steps.gate.outputs.run == 'true'
         run: |
-          mkdir -p vendor/embedpdf
+          mkdir -p vendor/bentopdf-viewer
           npm config set cache ./\.npm-cache
 
-      - name: Clone upstream embed-pdf-viewer
+      - name: Clone our viewer fork
         if: steps.gate.outputs.run == 'true'
-        run: git clone --depth 1 --branch main https://github.com/embedpdf/embed-pdf-viewer ./_upstream/embed-pdf-viewer
+        run: git clone --depth 1 --branch v2 https://github.com/alam00000/bentopdf-pdfium-viewer ./_fork/bentopdf-pdfium-viewer
 
       - name: Setup Node
         if: steps.gate.outputs.run == 'true'
@@ -64,55 +64,57 @@ jobs:
 
       - name: Install upstream deps
         if: steps.gate.outputs.run == 'true'
-        working-directory: ./_upstream/embed-pdf-viewer
+        working-directory: ./_fork/bentopdf-pdfium-viewer
         run: pnpm install --no-frozen-lockfile
 
       - name: Build snippet
         if: steps.gate.outputs.run == 'true'
-        working-directory: ./_upstream/embed-pdf-viewer
+        working-directory: ./_fork/bentopdf-pdfium-viewer
         run: pnpm run build:snippet
 
       - name: Pack snippet tarball
         if: steps.gate.outputs.run == 'true'
-        working-directory: ./_upstream/embed-pdf-viewer
+        working-directory: ./_fork/bentopdf-pdfium-viewer
         run: |
-          npm pack ./viewers/snippet --pack-destination ../../vendor/embedpdf
-          ls -l ../../vendor/embedpdf
+          npm pack ./viewers/snippet --pack-destination ../../vendor/bentopdf-viewer
+          ls -l ../../vendor/bentopdf-viewer
 
       - name: Sanitize tarball (rename pkg and pin deps)
         if: steps.gate.outputs.run == 'true'
         env:
           UPSTREAM_VERSION: ${{ steps.upstream-version.outputs.version }}
         run: |
-          TARBALL=$(ls vendor/embedpdf/*.tgz | sort | tail -n1)
+          TARBALL=$(ls vendor/bentopdf-viewer/*.tgz | sort | tail -n1)
           TMP=$(mktemp -d)
           tar -xzf "$TARBALL" -C "$TMP"
           PKG="$TMP/package/package.json"
           PKG="$PKG" node - <<'NODE'
             const fs = require("fs");
             const path = process.env.PKG;
-            const ver = process.env.UPSTREAM_VERSION || "1.4.1";
             const pkg = JSON.parse(fs.readFileSync(path, "utf8"));
-            pkg.name = "embedpdf-snippet";
+            pkg.name = "bentopdf-viewer";
             pkg.dependencies = pkg.dependencies || {};
+            // The rollup bundle inlines every @embedpdf/* package, so these
+            // declared deps would only pull unused copies from upstream npm.
             for (const k of Object.keys(pkg.dependencies)) {
-              if (k.startsWith("@embedpdf/")) pkg.dependencies[k] = `^${ver}`;
+              if (k.startsWith("@embedpdf/")) delete pkg.dependencies[k];
               if (k === "preact") pkg.dependencies[k] = "^10.17.0";
             }
             fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n");
           NODE
-          NEW=vendor/embedpdf/embedpdf-snippet-${UPSTREAM_VERSION}.tgz
+          PKG_VERSION=$(node -p "require('./$TMP/package/package.json').version" 2>/dev/null || node -p "require('$TMP/package/package.json').version")
+          NEW=vendor/bentopdf-viewer/bentopdf-viewer-${PKG_VERSION}.tgz
           tar -czf "$NEW" -C "$TMP" package
           # Remove any older snippet tarballs, keep only the new one
-          find vendor/embedpdf -maxdepth 1 -name 'embedpdf-snippet-*.tgz' ! -name "$(basename "$NEW")" -delete
+          find vendor/bentopdf-viewer -maxdepth 1 -name 'bentopdf-viewer-*.tgz' ! -name "$(basename "$NEW")" -delete
           rm -rf "$TMP"
-          ls -l vendor/embedpdf
+          ls -l vendor/bentopdf-viewer
 
       - name: Update package.json dependency path
         if: steps.gate.outputs.run == 'true'
         run: |
-          TARBALL=$(ls vendor/embedpdf/embedpdf-snippet-*.tgz | sort | tail -n1)
-          node -e "const fs=require('fs');const pkg=require('./package.json');const tar=process.argv[1];pkg.dependencies['embedpdf-snippet']='file:'+tar;fs.writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\n');" "$TARBALL"
+          TARBALL=$(ls vendor/bentopdf-viewer/bentopdf-viewer-*.tgz | sort | tail -n1)
+          node -e "const fs=require('fs');const pkg=require('./package.json');const tar=process.argv[1];pkg.dependencies['bentopdf-viewer']='file:'+tar;fs.writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\n');" "$TARBALL"
 
       - name: Refresh lockfile
         if: steps.gate.outputs.run == 'true'
@@ -121,7 +123,7 @@ jobs:
       - name: Write upstream version marker
         if: steps.gate.outputs.run == 'true'
         run: |
-          echo "${{ steps.upstream-version.outputs.version }}" > vendor/embedpdf/.upstream-version
+          echo "${{ steps.upstream-version.outputs.version }}" > vendor/bentopdf-viewer/.upstream-version
 
       - name: Cleanup upstream clone
         if: steps.gate.outputs.run == 'true'
@@ -131,11 +133,11 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
-          commit-message: "build(deps): bump embedpdf-snippet from ${{ steps.current-version.outputs.version }} to ${{ steps.upstream-version.outputs.version }}"
-          title: "build(deps): bump embedpdf-snippet from ${{ steps.current-version.outputs.version }} to ${{ steps.upstream-version.outputs.version }}"
+          commit-message: "build(deps): bump bentopdf-viewer from ${{ steps.current-version.outputs.version }} to ${{ steps.upstream-version.outputs.version }}"
+          title: "build(deps): bump bentopdf-viewer from ${{ steps.current-version.outputs.version }} to ${{ steps.upstream-version.outputs.version }}"
           body: |
             - Build snippet from upstream embed-pdf-viewer via `npm run build:snippet`
-            - Pack tarball into `vendor/embedpdf/` and point dependency to it
+            - Pack tarball into `vendor/bentopdf-viewer/` and point dependency to it
             - Refresh package-lock.json
-          branch: chore/update-embedpdf-snippet
+          branch: chore/update-bentopdf-viewer
           delete-branch: true
